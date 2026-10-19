@@ -1,0 +1,230 @@
+/*NB any reported numbers are rounded to nearest 5 to comply with disclosure rules*/
+
+clear
+set more off
+capture log close
+
+cd "file path supressed"
+log using "log", replace
+
+/*sysdir set PERSONAL "file path supressed"*/
+
+global raw "raw"
+global work "work"
+global output "output"
+
+odbc list
+odbc query "Databricks"
+odbc describe "calendar", dsn("Databricks")
+
+clear
+odbc load, exec("SELECT *FROM DB.ccu110_01_tmp_merged") dsn("databricks")
+
+/*destring vars to make file more managable*/
+destring age_at_arrival_date, replace
+destring arrivaltime, replace
+encode ethnicity_18_group, gen(ethnicity18)
+drop ethnicity_18_group
+encode id_type, gen(id_type2)
+drop id_type
+
+/*check and drop dups based on arrival date and time - no duplicates found (Jadene has already removed)
+duplicates tag person_id_deid arrivaldate arrivaltime, gen(tag1)*/
+
+/*flag cases where arrival date comes after the date of death*/
+
+gen flag=1 if arrivaldate > date_of_death & date_of_death!=.
+tab flag, mi
+gen days_flag= arrivaldate-date_of_death
+sum days_flag if flag==1, detail
+drop if flag==1
+drop flag
+drop days_flag
+
+
+/*OOH flag*/
+/*flag time between 18:00-08:00*/
+gen OOH=0
+replace OOH=1 if arrivaltime >=(1800) & arrivaltime!=.
+replace OOH=1 if arrivaltime <(800) & arrivaltime!=.
+/*flag weekends*/
+gen week_day = dow(arrivaldate)
+replace OOH=1 if week_day==0 | week_day==6
+/*flag bank hols*/
+/*2013*/
+replace OOH=1 if arrivaldate==d(01jan2013)
+replace OOH=1 if arrivaldate==d(29mar2013)
+replace OOH=1 if arrivaldate==d(01apr2013)
+replace OOH=1 if arrivaldate==d(06may2013)
+replace OOH=1 if arrivaldate==d(27may2013)
+replace OOH=1 if arrivaldate==d(26aug2013)
+replace OOH=1 if arrivaldate==d(25dec2013)
+replace OOH=1 if arrivaldate==d(26dec2013)
+/*2014*/
+replace OOH=1 if arrivaldate==d(01jan2014)
+replace OOH=1 if arrivaldate==d(18apr2014)
+replace OOH=1 if arrivaldate==d(21apr2014)
+replace OOH=1 if arrivaldate==d(05may2014)
+replace OOH=1 if arrivaldate==d(26may2014)
+replace OOH=1 if arrivaldate==d(25aug2014)
+replace OOH=1 if arrivaldate==d(25dec2014)
+replace OOH=1 if arrivaldate==d(26dec2014)
+/*2015*/
+replace OOH=1 if arrivaldate==d(01jan2015)
+replace OOH=1 if arrivaldate==d(03apr2015)
+replace OOH=1 if arrivaldate==d(06apr2015)
+replace OOH=1 if arrivaldate==d(04may2015)
+replace OOH=1 if arrivaldate==d(25may2015)
+replace OOH=1 if arrivaldate==d(31aug2015)
+replace OOH=1 if arrivaldate==d(25dec2015)
+replace OOH=1 if arrivaldate==d(28dec2015)
+/*2016*/
+replace OOH=1 if arrivaldate==d(01jan2016)
+replace OOH=1 if arrivaldate==d(25mar2016)
+replace OOH=1 if arrivaldate==d(28mar2016)
+replace OOH=1 if arrivaldate==d(02may2016)
+replace OOH=1 if arrivaldate==d(30may2016)
+replace OOH=1 if arrivaldate==d(29aug2016)
+replace OOH=1 if arrivaldate==d(26dec2016)
+replace OOH=1 if arrivaldate==d(27dec2016)
+/*2017*/
+replace OOH=1 if arrivaldate==d(02jan2017)
+replace OOH=1 if arrivaldate==d(14apr2017)
+replace OOH=1 if arrivaldate==d(17apr2017)
+replace OOH=1 if arrivaldate==d(01may2017)
+replace OOH=1 if arrivaldate==d(29may2017)
+replace OOH=1 if arrivaldate==d(28aug2017)
+replace OOH=1 if arrivaldate==d(25dec2017)
+replace OOH=1 if arrivaldate==d(26dec2017)
+/*2018*/
+replace OOH=1 if arrivaldate==d(01jan2018)
+replace OOH=1 if arrivaldate==d(30mar2018)
+replace OOH=1 if arrivaldate==d(02apr2018)
+replace OOH=1 if arrivaldate==d(07may2018)
+replace OOH=1 if arrivaldate==d(28may2018)
+replace OOH=1 if arrivaldate==d(27aug2018)
+replace OOH=1 if arrivaldate==d(25dec2018)
+replace OOH=1 if arrivaldate==d(26dec2018)
+/*2019*/
+replace OOH=1 if arrivaldate==d(01jan2019)
+replace OOH=1 if arrivaldate==d(19apr2019)
+replace OOH=1 if arrivaldate==d(22apr2019)
+replace OOH=1 if arrivaldate==d(06may2019)
+replace OOH=1 if arrivaldate==d(27may2019)
+replace OOH=1 if arrivaldate==d(26aug2019)
+replace OOH=1 if arrivaldate==d(25dec2019)
+replace OOH=1 if arrivaldate==d(26dec2019)
+/*2020*/
+replace OOH=1 if arrivaldate==d(01jan2020)
+replace OOH=1 if arrivaldate==d(10apr2020)
+replace OOH=1 if arrivaldate==d(13apr2020)
+replace OOH=1 if arrivaldate==d(08may2020)
+replace OOH=1 if arrivaldate==d(25may2020)
+replace OOH=1 if arrivaldate==d(31aug2020)
+replace OOH=1 if arrivaldate==d(25dec2020)
+replace OOH=1 if arrivaldate==d(28dec2020)
+/*2021*/
+replace OOH=1 if arrivaldate==d(01jan2021)
+replace OOH=1 if arrivaldate==d(02apr2021)
+replace OOH=1 if arrivaldate==d(05apr2021)
+replace OOH=1 if arrivaldate==d(03may2021)
+replace OOH=1 if arrivaldate==d(31may2021)
+replace OOH=1 if arrivaldate==d(30aug2021)
+replace OOH=1 if arrivaldate==d(27dec2021)
+replace OOH=1 if arrivaldate==d(28dec2021)
+/*2022*/
+replace OOH=1 if arrivaldate==d(03jan2022)
+replace OOH=1 if arrivaldate==d(15apr2022)
+replace OOH=1 if arrivaldate==d(18apr2022)
+replace OOH=1 if arrivaldate==d(02may2022)
+replace OOH=1 if arrivaldate==d(30may2022)
+replace OOH=1 if arrivaldate==d(29aug2022)
+replace OOH=1 if arrivaldate==d(26dec2022)
+replace OOH=1 if arrivaldate==d(27dec2022)
+/*2023*/
+replace OOH=1 if arrivaldate==d(02jan2023)
+replace OOH=1 if arrivaldate==d(07apr2023)
+replace OOH=1 if arrivaldate==d(10apr2023)
+replace OOH=1 if arrivaldate==d(01may2023)
+replace OOH=1 if arrivaldate==d(29may2023)
+replace OOH=1 if arrivaldate==d(28aug2023)
+replace OOH=1 if arrivaldate==d(25dec2023)
+replace OOH=1 if arrivaldate==d(26dec2023)
+
+/*gen died within 1 year of visit flag*/
+gen days_between=date_of_death-arrivaldate
+gen lyol_flag=0
+replace lyol_flag=1 if days_between<=365
+/*gen quart var*/
+gen quarter = quarter(arrivaldate)
+gen total=1
+/*gen year*/
+gen year = yofd(arrivaldate)
+
+/*arrival mode*/
+tab aearrivalmode_hes_ae, mi
+tab aearrivalmode_hes_ae arrival_mode_mapped_ecds, mi row
+/*gen new combined var - in later years the ecds data is a better record for this var*/
+gen arrival_mode=aearrivalmode_hes_ae
+replace arrival_mode=arrival_mode_mapped_ecds if aearrivalmode_hes_ae==9
+replace arrival_mode=. if arrival_mode==9
+tab arrival_mode, mi
+/*tab by icb*/
+tab ICB22CD_short arrival_mode, mi row
+
+
+/*collapse for ED visit numbers*/
+preserve
+collapse (sum) total lyol_flag, by(year quarter)
+/*round to nearest 5 for output*/
+gen lyol_round = round(lyol_flag, 5)
+gen total_round = round(total, 5)
+drop lyol_flag total
+/*save*/
+export excel using "$output\ED_visits_2013_2023.xls", firstrow(varlabel) sheet(all_visits) sheetreplace
+restore
+
+/*collapse for ED visit numbers IH & OOH*/
+gen IH=0
+replace IH=1 if OOH==0
+/*OOH*/
+preserve
+keep if OOH==1
+collapse (sum) total lyol_flag, by(year quarter)
+/*round to nearest 5 for output*/
+gen lyol_round = round(lyol_flag, 5)
+gen total_round = round(total, 5)
+drop lyol_flag total
+/*save*/
+export excel using "$output\ED_visits_2013_2023.xls", firstrow(varlabel) sheet(OOH_visits) sheetreplace
+restore
+/*IH*/
+preserve
+keep if IH==1
+collapse (sum) total lyol_flag, by(year quarter)
+/*round to nearest 5 for output*/
+gen lyol_round = round(lyol_flag, 5)
+gen total_round = round(total, 5)
+drop lyol_flag total
+/*save*/
+export excel using "$output\ED_visits_2013_2023.xls", firstrow(varlabel) sheet(IH_visits) sheetreplace
+restore
+
+
+
+/*collapse for ED visit BY AMBULANCE numbers*/
+preserve
+keep if arrival_mode==1
+collapse (sum) total lyol_flag, by(year quarter)
+/*round to nearest 5 for output*/
+gen lyol_round = round(lyol_flag, 5)
+gen total_round = round(total, 5)
+drop lyol_flag total
+/*save*/
+export excel using "$output\ED_visits_2013_2023.xls", firstrow(varlabel) sheet(by_ambulance) sheetreplace
+restore
+
+
+
+
+/********END OF DO FILE****************

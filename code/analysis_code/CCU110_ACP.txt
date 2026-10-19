@@ -1,0 +1,350 @@
+/*NB any reported numbers are rounded to nearest 5 to comply with disclosure rules*/
+
+clear
+set more off
+capture log close
+
+cd "file path supressed"
+log using "log", replace
+
+/*sysdir set PERSONAL "file path supressed"*/
+
+global raw "raw"
+global work "work"
+global output "output"
+
+odbc list
+odbc query "Databricks"
+odbc describe "calendar", dsn("Databricks")
+
+preserve
+clear
+odbc load, exec("SELECT *FROM DB.ccu110_01_icb_lookup") dsn("databricks")
+save "$work\icb_lookup.dta", replace
+restore
+
+/*clear
+odbc load, exec("SELECT *FROM DB.ccu110_01_tmp_hes_apc_all_years WHERE epistart >= '2016-01-01' AND epistart <= '2017-12-31'") dsn("databricks")*/
+
+/* insheet 1 year to play with a smaller set
+odbc load, exec("SELECT *FROM DB.ccu110_01_tmp_hes_apc_all_years_with_cips WHERE admidate >= '2018-01-01' AND admidate <= '2018-03-31'") dsn("databricks")
+*/
+
+
+clear
+odbc load, exec("SELECT *FROM DB.ccu110_01_tmp_hes_apc_all_years_with_cips WHERE ADMIMETH>='2' AND ADMIMETH<'3'") dsn("databricks")
+
+/*NB the extract contains all ACP episodes - we want to restrict to those that started with an unplanned/emergency admission
+It is possible to be transferred from a planned admission in to the ED for resus for example - but these cases do not represent unplanned care thus we will use admimeth to restrict the sample to those with an emergency admission - see https://archive.datadictionary.nhs.uk/DD%20Release%20May%202024/data_elements/admission_method_code__hospital_provider_spell_.html.
+We cannot restrict the ae data in the same way so, it may contain some cases where referral to ED came from within a planned admission in the hospital - important to note the differences in the methods - our ae data is all ae activity (some of which may have come from planned admissions ~5%s) versus our acp data is all unplanned*/
+
+/*look for duplicates at episode level - none found*/
+duplicates tag epikey, gen(tag1)
+drop tag1
+
+
+/*collapse to spell level - the data is currently at episode level AND final disdate has already been imputed so collapse to spell level using patid and admidate*/
+/*first check that all vars i want to keep are consistent at spell level*/
+browse person_id_deid cips_admidate cips_disdate ADMIMETH date_of_death age_at_arrival sex_code imd_quintile ethnicity_18_group ICB22CD_short
+collapse (firstnm) cips_disdate ADMIMETH date_of_death age_at_arrival sex_code imd_quintile ethnicity_18_group ICB22CD_short, by (person_id_deid cips_admidate)
+
+
+drop if cips_admidate==.
+
+/*some spells have no start and end date*/
+browse if cips_disdate==.
+replace cips_disdate=date_of_death if cips_disdate==.
+gen flag_disdate=1 if cips_disdate==.
+tab flag_disdate, mi
+
+
+drop if cips_disdate==. 
+drop flag_disdate
+
+
+keep if cips_disdate>=td(01jan2013)
+keep if cips_admidate<=td(31dec2023)
+
+/*flag if disdate before admidate*/
+gen flag1=1 if cips_disdate<cips_admidate
+tab flag1, mi
+drop if flag1==1 
+drop flag1
+
+/*flag cases where arrival date comes after the date of death*/
+
+
+gen flag=1 if cips_disdate > date_of_death & date_of_death!=.
+tab flag, mi
+gen days_flag= cips_disdate-date_of_death
+sum days_flag if flag==1, detail
+replace cips_disdate=date_of_death if flag==1 & (days_flag>=1 & days_flag<=7) 
+drop flag
+drop days_flag
+/*same for admidate*/
+gen flag=1 if cips_admidate > date_of_death & date_of_death!=.
+tab flag, mi
+drop if flag==1
+
+/*destring vars to make file more managable*/
+destring age_at_arrival, replace
+encode ethnicity_18_group, gen(ethnicity18)
+drop ethnicity_18_group
+
+/*gen died within 1 year of admission date - (could have flagged people who died within a year of disdate but have decided it makes most sense to talk about people who died within a year of the admission date for admissions and for bed days)*/
+gen days_between=date_of_death-cips_admidate
+gen lyol_flag=0
+replace lyol_flag=1 if days_between<=365
+/*gen quart var*/
+gen quarter = quarter(cips_admidate)
+gen total=1
+/*gen year*/
+gen year = yofd(cips_admidate)
+
+/*for the admissions summary need to refine the time period so admidate >=01/01/2013 - because atm we have people admitted before study start period so we can keep those day for the unplanned days count*/
+gen study_period=1 if cips_admidate>=td(01jan2013)
+
+/*collapse for ED visit numbers*/
+preserve
+keep if study_period==1
+collapse (sum) total lyol_flag, by(year quarter)
+/*round to nearest 5 for output*/
+gen lyol_round = round(lyol_flag, 5)
+gen total_round = round(total, 5)
+drop lyol_flag total
+/*save*/
+export excel using "$output\ACP_2013_2023.xls", firstrow(varlabel) sheet(unplanned_acp) sheetreplace
+restore
+
+/*save the pre, during and after covid timepoints*/
+preserve
+keep if cips_admidate>=td(01mar2018) & cips_admidate<=td(30apr2019)
+gen time_period=1
+save "$work\pre_covid.dta", replace
+restore
+preserve
+keep if cips_admidate>=td(01mar2020) & cips_admidate<=td(30apr2021)
+gen time_period=2
+save "$work\during_covid.dta", replace
+restore
+preserve
+keep if cips_admidate>=td(01mar2022) & cips_admidate<=td(30apr2023)
+gen time_period=3
+save "$work\after_covid.dta", replace
+restore
+
+save "$work/ACP_beddays.dta", replace
+
+/********UNPLANNED BED DAYS ANALSYSI*************/
+
+/* work with a smaller sample for developing code faster
+set seed 12345
+sample 1*/
+
+clear
+use "$work/ACP_beddays.dta"
+
+/*2013-2015*/
+preserve
+keep if cips_admidate>=td(01jan2013) & cips_admidate<=td(31dec2015)
+/*expand bed days to collapse back to quarters - test code*/
+expand cips_disdate-cips_admidate + 1
+/*start here and see how small we need to go to do the next bit*/
+bysort person_id_deid cips_admidate: gen day_counter= _n - 1
+gen date = cips_admidate + day_counter
+format date %td
+/*gen quart var*/
+gen quarter2 = quarter(date)
+gen total2=1
+/*gen year*/
+gen year2 = yofd(date)
+/*collapse*/
+collapse (sum) total2 lyol_flag, by(year2 quarter2)
+/*round to nearest 5 for output*/
+gen lyol_round = round(lyol_flag, 5)
+gen total_round = round(total2, 5)
+drop lyol_flag total2
+/*save*/
+export excel using "$output\ACP_beddays_2013_2015.xls", firstrow(varlabel) sheet(unplanned_beddays) sheetreplace
+restore
+
+/*2016-2018*/
+preserve
+keep if cips_admidate>=td(01jan2016) & cips_admidate<=td(31dec2018)
+/*expand bed days to collapse back to quarters - test code*/
+expand cips_disdate-cips_admidate + 1
+/*start here and see how small we need to go to do the next bit*/
+bysort person_id_deid cips_admidate: gen day_counter= _n - 1
+gen date = cips_admidate + day_counter
+format date %td
+/*gen quart var*/
+gen quarter2 = quarter(date)
+gen total2=1
+/*gen year*/
+gen year2 = yofd(date)
+/*collapse*/
+collapse (sum) total2 lyol_flag, by(year2 quarter2)
+/*round to nearest 5 for output*/
+gen lyol_round = round(lyol_flag, 5)
+gen total_round = round(total2, 5)
+drop lyol_flag total2
+/*save*/
+export excel using "$output\ACP_beddays_2016_2018.xls", firstrow(varlabel) sheet(unplanned_beddays) sheetreplace
+restore
+
+/*2019-2021*/
+preserve
+keep if cips_admidate>=td(01jan2019) & cips_admidate<=td(31dec2021)
+/*expand bed days to collapse back to quarters - test code*/
+expand cips_disdate-cips_admidate + 1
+/*start here and see how small we need to go to do the next bit*/
+bysort person_id_deid cips_admidate: gen day_counter= _n - 1
+gen date = cips_admidate + day_counter
+format date %td
+/*gen quart var*/
+gen quarter2 = quarter(date)
+gen total2=1
+/*gen year*/
+gen year2 = yofd(date)
+/*collapse*/
+collapse (sum) total2 lyol_flag, by(year2 quarter2)
+/*round to nearest 5 for output*/
+gen lyol_round = round(lyol_flag, 5)
+gen total_round = round(total2, 5)
+drop lyol_flag total2
+/*save*/
+export excel using "$output\ACP_beddays_2019_2021.xls", firstrow(varlabel) sheet(unplanned_beddays) sheetreplace
+restore
+
+/*2022-2023*/
+preserve
+keep if cips_admidate>=td(01jan2022) & cips_admidate<=td(31dec2023)
+/*expand bed days to collapse back to quarters - test code*/
+expand cips_disdate-cips_admidate + 1
+/*start here and see how small we need to go to do the next bit*/
+bysort person_id_deid cips_admidate: gen day_counter= _n - 1
+gen date = cips_admidate + day_counter
+format date %td
+/*gen quart var*/
+gen quarter2 = quarter(date)
+gen total2=1
+/*gen year*/
+gen year2 = yofd(date)
+/*collapse*/
+collapse (sum) total2 lyol_flag, by(year2 quarter2)
+/*round to nearest 5 for output*/
+gen lyol_round = round(lyol_flag, 5)
+gen total_round = round(total2, 5)
+drop lyol_flag total2
+/*save*/
+export excel using "$output\ACP_beddays_2022_2023.xls", firstrow(varlabel) sheet(unplanned_beddays) sheetreplace
+restore
+
+/*
+clear
+use "$output\ACP_beddays_2013_2015.xls"
+append using "$output\ACP_beddays_2016_2018.xls"
+append using "$output\ACP_beddays_2019_2021.xls"
+append using "$output\ACP_beddays_2022_2023.xls"*/
+
+
+/***********MODELLING ANALYSIS ON THE UNPLANNED ADMISSIONS DATA*******************/
+clear
+use "$work\pre_covid.dta"
+append using "$work\during_covid.dta"
+append using "$work\after_covid.dta"
+save "$work/pre_during_after_covid.dta", replace
+
+clear
+use "$work/pre_during_after_covid.dta"
+
+/*recode ethnicity*/
+label list ethnicity18
+recode ethnicity18 (9=1) (13 15 4 =2) (16 17 18 6 = 3) (8 = 4) (12 = 5) (14 = 6) (11 = 7) (1 = 8) (10 = 9) (2 3 5 7 = 10), gen(ethnicity10)
+tab ethnicity18 ethnicity10, mi
+label define ethnicity10 1 "White British" 2 "White other" 3 "mixed ethnicity" 4 "Bangladeshi" 5 "Indian" 6 "Pakistani" 7 "Chinese" 8 "Black African" 9 "Black Caribbean" 10 "other"
+label values ethnicity10 ethnicity10
+tab ethnicity18 ethnicity10, mi
+
+/*categorise age*/
+gen age_cats=.
+replace age_cats=1 if age_at_arrival<60
+replace age_cats=2 if age_at_arrival>=60 & age_at_arrival<=69
+replace age_cats=3 if age_at_arrival>=70 & age_at_arrival<=79
+replace age_cats=4 if age_at_arrival>=80 
+label define age_cats 1 "<60" 2 "60-69" 3 "70-79" 4 "80+"
+label values age_cats age_cats
+tab age_cats, mi
+tab age_at_arrival age_cats, mi
+
+/*label time period var*/
+label define time_period 1 "pre Covid" 2 "during Covid" 3 "after Covid"
+label values time_period time_period
+
+/*table 1*/
+preserve
+recode ethnicity10 (.=99)
+recode sex_code (.=99)
+recode imd_quintile (.=99)
+table (var) (time_period lyol_flag), statistic(median age_at_arrival) statistic(iqr age_at_arrival) statistic(fvfrequency age_cats sex_code ethnicity10 imd_quintile) nototals  
+collect export "$output\table1.xls", replace
+restore
+
+/* work with a smaller sample for developing code faster
+set seed 12345
+sample 10*/
+
+/*interaction models*/
+/*imd unadjusted*/
+poisson lyol_flag i.imd_quintile##i.time_period, vce(robust)
+margins imd_quintile#time_period
+marginsplot
+
+/*imd - with margins at median age*/
+poisson lyol_flag age_at_arrival i.sex_code i.imd_quintile##i.time_period, vce(robust)
+estimates store imd_model
+etable, estimates(imd_model) cstat(_r_b) cstat(_r_ci) cstat(_r_p) export("$output\imd_interaction.xls", replace)
+margins imd_quintile#time_period, at(age=65)  
+etable, margins cstat(_r_b) cstat(_r_ci) export("$output\imd_marginal_v2.xls", replace)
+marginsplot, title("") xtitle("deprivation quintiles (1 is most deprived)") ytitle("predicted proportion")
+graph export "$output\imd_marginal_v2.png", replace
+
+/*imd - with margins at age 80*/
+poisson lyol_flag age_at_arrival i.sex_code i.imd_quintile##i.time_period, vce(robust)
+estimates store imd_model
+etable, estimates(imd_model) cstat(_r_b) cstat(_r_ci) cstat(_r_p) export("$output\imd_interaction.xls", replace)
+margins imd_quintile#time_period, at(age=80) 
+etable, margins cstat(_r_b) cstat(_r_ci) export("$output\imd_marginal.xls", replace)
+marginsplot, title("") xtitle("deprivation quintiles (1 is most deprived)") ytitle("predicted proportion")
+graph export "$output\imd_marginal.png", replace
+
+/*ICB LEVEL analysis*/
+clear
+use "$work\icb_lookup.dta"
+keep ICB22CD ICB22NM
+duplicates drop ICB22CD ICB22NM, force
+gen ICB22CD_short= substr(ICB22CD, -2, 2)
+sort ICB22CD_short
+destring ICB22CD_short, replace
+save "$work\icb_lookup2.dta", replace 
+clear
+use "$work/pre_during_after_covid.dta"
+
+sort ICB22CD_short
+save "$work/pre_during_after_covid.dta", replace
+merge m:1 ICB22CD_short using "$work\icb_lookup2.dta"
+
+drop if ICB22CD_short==.
+/*collapse*/
+collapse (sum) total lyol_flag, by(ICB22NM time_period)
+/*round to nearest 5 for output*/
+gen lyol_round = round(lyol_flag, 5)
+gen total_round = round(total, 5)
+drop lyol_flag total
+/*reshape*/
+reshape wide lyol_round total_round, i(ICB22NM) j(time_period)
+/*save*/
+export excel using "$output\admission_by_ICB.xls", firstrow(varlabel) sheet(icb) sheetreplace
+
+/*********************************************END OF DO FILE*********************************************************************/
+
